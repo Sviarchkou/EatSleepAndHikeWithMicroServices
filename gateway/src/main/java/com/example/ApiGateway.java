@@ -39,6 +39,7 @@ public class ApiGateway {
 
         public RequestHandler(Socket socket) throws IOException {
             this.socket = socket;
+            socket.setSoTimeout(200);
         }
 
         public void run(){
@@ -66,6 +67,7 @@ public class ApiGateway {
                         continue;
                     }
 
+                    boolean isChunked = false;
                     int contentLength = 0;
                     while(!Objects.equals(line = reader.readLine(), "")){
                         if (line.startsWith("Host: ")){
@@ -77,34 +79,52 @@ public class ApiGateway {
                         if (line.startsWith("Content-Length: ")){
                             contentLength = Integer.parseInt(line.substring("Content-Length: ".length()));
                         }
+                        if(line.equals("Transfer-Encoding: chunked"))
+                            isChunked = true;
                         sb.append(line).append("\r\n");
                     }
                     sb.append("\r\n");
                     System.out.println("|-------| Request |-------|");
                     System.out.println(sb);
 
-                    ArrayList<Character> data = new ArrayList<>();
-                    int bytesRead = 0;
-                    char[] buffer = new char[8192];
-                    while(contentLength > 0 && (bytesRead = reader.read(buffer)) != -1){
-                        //socket.setSoTimeout(200);
-                        for (int i = 0; i < bytesRead; i++){
-                            data.add(buffer[i]);
-                        }
-                        contentLength -= bytesRead;
-                    }
 
-                    char[] charData = new char[data.size()];
-                    for (int i = 0; i < data.size(); i++) {
-                        charData[i] = data.get(i);
-                    }
+                    ArrayList<Character> data = new ArrayList<>();
+                    int charsRead = 0;
+                    char[] buffer = new char[8192];
+
                     BufferedWriter serviceWriter = new BufferedWriter(new OutputStreamWriter(serviceSocket.getOutputStream()));
                     serviceWriter.write(sb.toString());
-                    serviceWriter.write(charData);
+
+                    if (isChunked){
+                        int cur = 0;
+                        int prev = 0; // \n - 10   \r - 13
+                        int grandPrev = 0;
+                        while((cur = reader.read()) != -1){
+                            serviceWriter.write(cur);
+                            System.out.print(cur);
+                            if (cur == 10 && prev == 13 && grandPrev == 10){
+                                break;
+                            }
+                            grandPrev = prev;
+                            prev = cur;
+                        }
+                    } else{
+                        while(contentLength > 0 && (charsRead = reader.read(buffer)) != -1){
+                            for (int i = 0; i < charsRead; i++){
+                                data.add(buffer[i]);
+                            }
+                            contentLength -= (new String(buffer, 0, charsRead)).getBytes(StandardCharsets.UTF_8).length;
+                        }
+                        char[] charData = new char[data.size()];
+                        for (int i = 0; i < data.size(); i++) {
+                            charData[i] = data.get(i);
+                        }
+                        serviceWriter.write(charData);
+                    }
                     serviceWriter.flush();
 
-                    boolean isChunked = false;
-                    //serviceSocket.setSoTimeout(10000);
+                    isChunked = false;
+                    serviceSocket.setSoTimeout(200);
                     BufferedReader serviceReader = new BufferedReader(new InputStreamReader(serviceSocket.getInputStream()));
                     sb = new StringBuilder();
                     while(!Objects.equals(line = serviceReader.readLine(), "")){
@@ -120,18 +140,6 @@ public class ApiGateway {
                     System.out.println(sb);
 
                     writer.write(sb.toString());
-                    //socket.getOutputStream().write(sb.toString().getBytes(StandardCharsets.UTF_8));
-                    /*var byteBuffer = new byte[8192];
-                    if (isChunked){
-                        byteBuffer = readChunkedBody(serviceSocket.getInputStream());
-                        socket.getOutputStream().write(byteBuffer);
-                    }
-                    else{
-                        while((bytesRead = serviceSocket.getInputStream().read(byteBuffer)) != -1 && contentLength > 0){
-                            socket.getOutputStream().write(byteBuffer, 0, bytesRead);
-                            contentLength -= bytesRead;
-                        }
-                    }*/
                     if (isChunked){
                         int cur = 0;
                         int prev = 0; // \n - 10   \r - 13
@@ -148,12 +156,12 @@ public class ApiGateway {
                     }
                     else{
                         data.clear();
-                        while(contentLength > 0 && (bytesRead = reader.read(buffer)) != -1){
-                            for (int i = 0; i < bytesRead; i++){
+                        while(contentLength > 0 && (charsRead = reader.read(buffer)) != -1){
+                            for (int i = 0; i < charsRead; i++){
                                 writer.write(buffer[i]);
                                 System.out.print(buffer[i]);
                             }
-                            contentLength -= bytesRead;
+                            contentLength -= (new String(buffer, 0, charsRead)).getBytes(StandardCharsets.UTF_8).length;;
                         }
                     }
                     writer.flush();
